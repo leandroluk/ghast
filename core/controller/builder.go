@@ -107,6 +107,16 @@ func (b *Builder) Intercept(is ...any) *Builder {
 	return b
 }
 
+// Filter attaches exception filter(s) to the most recent route.
+func (b *Builder) Filter(fs ...any) *Builder {
+	if len(b.routes) == 0 {
+		panic("controller.Filter() called before any route definition")
+	}
+	last := b.routes[len(b.routes)-1]
+	last.Filters = append(last.Filters, fs...)
+	return b
+}
+
 // Build finalizes the controller and returns its instance.
 // It infers the name automatically when not provided.
 func (b *Builder) Build() *Controller {

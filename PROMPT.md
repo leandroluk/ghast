@@ -28,6 +28,9 @@ core/
   interceptor/
     interceptor.go
     package.go
+  internal/
+    naming/
+      naming.go
   middleware/
     context.go
     handler.go

@@ -3,6 +3,7 @@ package application
 
 import (
 	"github.com/leandroluk/ghast/core/container"
+	"github.com/leandroluk/ghast/core/exception"
 	"github.com/leandroluk/ghast/core/logger"
 	"github.com/leandroluk/ghast/core/module"
 )
@@ -20,10 +21,11 @@ func New(fn func(b *Builder)) *Application {
 	ctn := container.NewContainer()
 	b := &Builder{
 		app: &Application{
-			name:      "ghast",
-			logger:    logger.NewConsole(), // default
-			container: ctn,
-			modules:   []*module.Module{},
+			name:          "ghast",
+			logger:        logger.NewConsole(),
+			container:     ctn,
+			modules:       []*module.Module{},
+			defaultFilter: exception.NewDefault(),
 		},
 	}
 	fn(b)

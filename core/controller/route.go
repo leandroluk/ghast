@@ -25,4 +25,5 @@ type Route struct {
 	Guards       []any
 	Interceptors []any
 	Middlewares  []middleware.Middleware
+	Filters      []any
 }

@@ -27,6 +27,26 @@ func Chain(middlewares ...*Middleware) Handler {
 	}
 }
 
+// Compose executa middlewares em sequência e por fim chama o handler final.
+func Compose(final Handler, middlewares ...Middleware) Handler {
+	return func(ctx Context) error {
+		index := -1
+		var next func() error
+		next = func() error {
+			index++
+			if index >= len(middlewares) {
+				return final(ctx)
+			}
+			mw := middlewares[index]
+			return mw.Handler(&chainedContext{
+				Context: ctx,
+				next:    next,
+			})
+		}
+		return next()
+	}
+}
+
 // chainedContext wraps a Context to control middleware execution order.
 type chainedContext struct {
 	Context

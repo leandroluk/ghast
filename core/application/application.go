@@ -3,10 +3,10 @@ package application
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/leandroluk/ghast/core/container"
 	"github.com/leandroluk/ghast/core/controller"
+	"github.com/leandroluk/ghast/core/exception"
 	"github.com/leandroluk/ghast/core/guard"
 	"github.com/leandroluk/ghast/core/interceptor"
 	"github.com/leandroluk/ghast/core/internal/naming"
@@ -23,7 +23,9 @@ type Application struct {
 	globalMiddlewares  []middleware.Middleware
 	globalInterceptors []interceptor.Interceptor
 	globalGuards       []guard.Guard
+	globalFilters      []exception.Filter
 	adapters           []Adapter
+	defaultFilter      exception.Filter
 }
 
 type Builder struct{ app *Application }
@@ -40,23 +42,41 @@ func (b *Builder) Logger(l logger.Logger) *Builder {
 	return b
 }
 
-// já existentes...
+func (b *Builder) DefaultFilter(f exception.Filter) *Builder {
+	b.app.defaultFilter = f
+	return b
+}
+
+func (b *Builder) DisableDefaultFilter() *Builder {
+	b.app.defaultFilter = nil
+	return b
+}
+
 func (b *Builder) Use(mw ...middleware.Middleware) *Builder {
 	b.app.globalMiddlewares = append(b.app.globalMiddlewares, mw...)
 	return b
 }
+
 func (b *Builder) Intercept(ic ...interceptor.Interceptor) *Builder {
 	b.app.globalInterceptors = append(b.app.globalInterceptors, ic...)
 	return b
 }
+
 func (b *Builder) Guard(g ...guard.Guard) *Builder {
 	b.app.globalGuards = append(b.app.globalGuards, g...)
 	return b
 }
+
+func (b *Builder) Filter(fs ...exception.Filter) *Builder {
+	b.app.globalFilters = append(b.app.globalFilters, fs...)
+	return b
+}
+
 func (b *Builder) Register(mods ...*module.Module) *Builder {
 	b.app.modules = append(b.app.modules, mods...)
 	return b
 }
+
 func (b *Builder) Mount(adapters ...Adapter) *Builder {
 	b.app.adapters = append(b.app.adapters, adapters...)
 	return b
@@ -64,7 +84,6 @@ func (b *Builder) Mount(adapters ...Adapter) *Builder {
 
 func (a *Application) Start(addr string) error {
 	log := a.logger.WithAppTag(a.name)
-
 	log.Logf("NestFactory", "Starting Ghast application...")
 
 	for _, m := range a.modules {
@@ -86,17 +105,16 @@ func (a *Application) Start(addr string) error {
 			}
 		}
 	}
-
 	log.Logf("NestApplication", "Ghast application successfully started")
 	log.Logf("bootstrap", "🌎 started on %s", addr)
 	return nil
 }
 
 func (a *Application) mountAdapter(log logger.Logger, ad Adapter) error {
-	// nomes dos globais (pra log bonito)
 	globalGuardNames := mapSlice(a.globalGuards, func(g guard.Guard) string { return naming.TypeNameOf(g) })
 	globalInterNames := mapSlice(a.globalInterceptors, func(i interceptor.Interceptor) string { return naming.TypeNameOf(i) })
 	globalMwNames := mapSlice(a.globalMiddlewares, func(m middleware.Middleware) string { return safeMwName(m) })
+	globalFilterNames := mapSlice(a.globalFilters, func(f exception.Filter) string { return naming.TypeNameOf(f) })
 
 	for _, m := range a.modules {
 		for _, ctrl := range m.Controllers {
@@ -106,71 +124,76 @@ func (a *Application) mountAdapter(log logger.Logger, ad Adapter) error {
 			}
 			log.Logf("RoutesResolver", "%s {%s}:", c.Name, c.Base)
 
-			for _, route := range c.Routes {
-				// nomes específicos da rota
-				routeGuardNames := mapAny(route.Guards, naming.TypeNameOf)
-				routeInterNames := mapAny(route.Interceptors, naming.TypeNameOf)
-				routeMwNames := make([]string, 0, len(route.Middlewares))
-				for _, mw := range route.Middlewares {
+			for _, rt := range c.Routes {
+				// nomes por rota (log)
+				routeGuardNames := mapAny(rt.Guards, naming.TypeNameOf)
+				routeInterNames := mapAny(rt.Interceptors, naming.TypeNameOf)
+				routeMwNames := make([]string, 0, len(rt.Middlewares))
+				for _, mw := range rt.Middlewares {
 					routeMwNames = append(routeMwNames, safeMwName(mw))
 				}
+				routeFilterNames := mapAny(rt.Filters, naming.TypeNameOf)
 
-				// print estilo Nest (extra)
 				if len(globalGuardNames) > 0 || len(routeGuardNames) > 0 {
-					log.Logf("RouterExplorer", "[Guards] %s",
-						joinTwo(globalGuardNames, routeGuardNames))
+					log.Logf("RouterExplorer", "[Guards] %s", joinTwo(globalGuardNames, routeGuardNames))
 				}
 				if len(globalInterNames) > 0 || len(routeInterNames) > 0 {
-					log.Logf("RouterExplorer", "[Interceptors] %s",
-						joinTwo(globalInterNames, routeInterNames))
+					log.Logf("RouterExplorer", "[Interceptors] %s", joinTwo(globalInterNames, routeInterNames))
 				}
 				if len(globalMwNames) > 0 || len(routeMwNames) > 0 {
-					log.Logf("RouterExplorer", "[Middlewares] %s",
-						joinTwo(globalMwNames, routeMwNames))
+					log.Logf("RouterExplorer", "[Middlewares] %s", joinTwo(globalMwNames, routeMwNames))
+				}
+				if len(globalFilterNames) > 0 || len(routeFilterNames) > 0 {
+					log.Logf("RouterExplorer", "[Filters] %s", joinTwo(globalFilterNames, routeFilterNames))
 				}
 
-				log.Logf("RouterExplorer", "Mapped {%s, %s} route", route.Path, route.Method)
-				ad.OnRoute(route.Path, route.Method, route.Handler)
+				// === PIPELINE REAL ===
+
+				// 1) Handler base (controller)
+				h := rt.Handler
+
+				// 2) Interceptors (globais + rota)
+				allInterceptors := append([]interceptor.Interceptor{}, a.globalInterceptors...)
+				for _, it := range rt.Interceptors {
+					if v, ok := it.(interceptor.Interceptor); ok {
+						allInterceptors = append(allInterceptors, v)
+					}
+				}
+				h = wrapWithInterceptors(h, allInterceptors)
+
+				// 3) Guards (globais + rota)
+				allGuards := append([]guard.Guard{}, a.globalGuards...)
+				for _, g := range rt.Guards {
+					if v, ok := g.(guard.Guard); ok {
+						allGuards = append(allGuards, v)
+					}
+				}
+				h = wrapWithGuards(h, allGuards)
+
+				// 4) Middlewares (globais + rota)
+				allMws := append([]middleware.Middleware{}, a.globalMiddlewares...)
+				allMws = append(allMws, rt.Middlewares...)
+				h = middleware.Compose(h, allMws...)
+
+				// 5) Exception filters (globais + rota + default)
+				allFilters := append([]exception.Filter{}, a.globalFilters...)
+				for _, f := range rt.Filters {
+					if v, ok := f.(exception.Filter); ok {
+						allFilters = append(allFilters, v)
+					}
+				}
+				if a.defaultFilter != nil {
+					allFilters = append(allFilters, a.defaultFilter) // no fim da cadeia
+				} else {
+					allFilters = append(allFilters, exception.NewDefault()) // fallback
+				}
+				h = wrapWithExceptions(h, allFilters)
+
+				// Mapear
+				log.Logf("RouterExplorer", "Mapped {%s, %s} route", rt.Path, rt.Method)
+				ad.OnRoute(rt.Path, rt.Method, h)
 			}
 		}
 	}
-
 	return nil
-}
-
-func mapSlice[T any, R any](in []T, f func(T) R) []R {
-	out := make([]R, 0, len(in))
-	for _, v := range in {
-		out = append(out, f(v))
-	}
-	return out
-}
-
-func mapAny(in []any, f func(any) string) []string {
-	out := make([]string, 0, len(in))
-	for _, v := range in {
-		out = append(out, f(v))
-	}
-	return out
-}
-
-func joinTwo(a, b []string) string {
-	parts := []string{}
-	if len(a) > 0 {
-		parts = append(parts, "global: "+strings.Join(a, ", "))
-	}
-	if len(b) > 0 {
-		parts = append(parts, "route: "+strings.Join(b, ", "))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.Join(parts, " | ")
-}
-
-func safeMwName(m middleware.Middleware) string {
-	if m.Name != "" {
-		return m.Name
-	}
-	return "<anonymous>"
 }
