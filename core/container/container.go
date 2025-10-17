@@ -10,11 +10,18 @@ import (
 	"github.com/leandroluk/ghast/core/provider"
 )
 
+// interface local para cleanup por request (não exige declarar no provider pkg)
+type onRequestDestroy interface{ OnRequestDestroy() }
+
 // Container manages dependency resolution and provider lifecycle.
 type Container struct {
 	mu        sync.RWMutex
 	providers map[string]*provider.Provider
 	instances map[string]any
+
+	// request-scope
+	reqMu   sync.RWMutex
+	reqInst map[string]map[string]any // reqID -> providerName -> instance
 }
 
 // NewContainer creates a new instance of the container.
@@ -22,6 +29,7 @@ func NewContainer() *Container {
 	return &Container{
 		providers: make(map[string]*provider.Provider),
 		instances: make(map[string]any),
+		reqInst:   make(map[string]map[string]any),
 	}
 }
 
@@ -34,18 +42,27 @@ func (c *Container) Register(p *provider.Provider) {
 	if _, exists := c.providers[p.Name]; exists {
 		panic(fmt.Sprintf("[container] provider '%s' already registered", p.Name))
 	}
-
 	c.providers[p.Name] = p
 }
 
 // Resolve returns an instance of the requested dependency.
 // It respects the provider's lifecycle scope (Singleton, Transient, Request).
+// Para Request-scope sem reqID => panic (uso incorreto).
 func (c *Container) Resolve(target any) any {
+	return c.resolveInternal(target, "", make(map[string]bool))
+}
+
+// ResolveWithReq resolve considerando o cache por requisição (reqID).
+func (c *Container) ResolveWithReq(target any, reqID string) any {
+	return c.resolveInternal(target, reqID, make(map[string]bool))
+}
+
+// resolveInternal unifica a resolução e propaga reqID para TODA a cadeia de dependências.
+func (c *Container) resolveInternal(target any, reqID string, seen map[string]bool) any {
 	targetType := reflect.TypeOf(target)
 	if targetType.Kind() == reflect.Pointer {
 		targetType = targetType.Elem()
 	}
-
 	name := provider.TypeName(targetType)
 
 	c.mu.RLock()
@@ -55,33 +72,12 @@ func (c *Container) Resolve(target any) any {
 		panic(fmt.Sprintf("[container] provider not found: %s", name))
 	}
 
-	switch p.Scope {
-	case provider.Transient:
-		return c.instantiate(p, make(map[string]bool))
-
-	case provider.Request:
-		fmt.Printf("[container] warning: request scope not yet implemented for %s\n", p.Name)
-		return c.instantiate(p, make(map[string]bool))
-
-	default: // Singleton
-		c.mu.RLock()
-		instance, exists := c.instances[name]
-		c.mu.RUnlock()
-		if exists {
-			return instance
-		}
-
-		instance = c.instantiate(p, make(map[string]bool))
-
-		c.mu.Lock()
-		c.instances[name] = instance
-		c.mu.Unlock()
-
-		return instance
-	}
+	// ⚠️ sempre centraliza aqui
+	return c.resolveProvider(p, reqID, seen)
 }
 
 // Inject preenche campos com tag `inject:"..."` em uma instância já criada.
+// (Sem reqID: não suporta request-scoped aqui. Se tentar, vai panicar — correto.)
 func (c *Container) Inject(target any) {
 	v := reflect.ValueOf(target)
 	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Struct {
@@ -108,7 +104,7 @@ func (c *Container) Inject(target any) {
 			panic(fmt.Sprintf("[container] dependency not found: %s", depName))
 		}
 
-		depInstance := c.instantiate(depProvider, seen)
+		depInstance := c.resolveProvider(depProvider, "", seen)
 		depVal := reflect.ValueOf(depInstance)
 
 		if depVal.Type().AssignableTo(field.Type) && inst.Field(i).CanSet() {
@@ -122,19 +118,105 @@ func (c *Container) Inject(target any) {
 	}
 }
 
+// adiciona no arquivo (mesmo package)
+func (c *Container) resolveProvider(p *provider.Provider, reqID string, seen map[string]bool) any {
+	name := p.Name
+
+	switch p.Scope {
+	case provider.Request:
+		if reqID == "" {
+			panic(fmt.Sprintf("[container] provider %s is request-scoped but no request is active", p.Name))
+		}
+
+		// read path
+		c.reqMu.RLock()
+		if perReq, ok := c.reqInst[reqID]; ok {
+			if inst, ok := perReq[name]; ok {
+				c.reqMu.RUnlock()
+				return inst
+			}
+		}
+		c.reqMu.RUnlock()
+
+		// cria
+		instance := c.instantiate(p, seen, reqID)
+
+		// write path (double-check)
+		c.reqMu.Lock()
+		if _, ok := c.reqInst[reqID]; !ok {
+			c.reqInst[reqID] = make(map[string]any)
+		}
+		if existing, ok := c.reqInst[reqID][name]; ok {
+			c.reqMu.Unlock()
+			return existing
+		}
+		c.reqInst[reqID][name] = instance
+		c.reqMu.Unlock()
+		return instance
+
+	case provider.Transient:
+		return c.instantiate(p, seen, reqID)
+
+	default: // Singleton
+		// 1º read lock
+		c.mu.RLock()
+		if inst, ok := c.instances[name]; ok {
+			c.mu.RUnlock()
+			return inst
+		}
+		c.mu.RUnlock()
+
+		// cria
+		instance := c.instantiate(p, seen, reqID)
+
+		// escreve com double-check
+		c.mu.Lock()
+		if existing, ok := c.instances[name]; ok {
+			c.mu.Unlock()
+			return existing
+		}
+		c.instances[name] = instance
+		c.mu.Unlock()
+		return instance
+	}
+}
+
+// BeginRequest inicia o escopo de request para um reqID.
+func (c *Container) BeginRequest(reqID string) {
+	c.reqMu.Lock()
+	if _, ok := c.reqInst[reqID]; !ok {
+		c.reqInst[reqID] = make(map[string]any)
+	}
+	c.reqMu.Unlock()
+}
+
+// EndRequest finaliza o escopo: executa OnRequestDestroy() (se existir) e limpa o cache.
+func (c *Container) EndRequest(reqID string) {
+	c.reqMu.Lock()
+	if perReq, ok := c.reqInst[reqID]; ok {
+		for _, inst := range perReq {
+			if d, ok := inst.(onRequestDestroy); ok {
+				func() { defer func() { _ = recover() }(); d.OnRequestDestroy() }()
+			}
+		}
+		delete(c.reqInst, reqID)
+	}
+	c.reqMu.Unlock()
+}
+
 // instantiate creates an instance of a provider and injects dependencies recursively.
-func (c *Container) instantiate(p *provider.Provider, seen map[string]bool) any {
+func (c *Container) instantiate(p *provider.Provider, seen map[string]bool, reqID string) any {
 	if p.Kind == provider.UseFactory {
-		return c.instantiateFactory(p)
+		return c.instantiateFactory(p, reqID)
 	}
 	if p.Kind == provider.UseValue {
 		return p.Value
 	}
-	return c.instantiateClass(p, seen)
+	return c.instantiateClass(p, seen, reqID)
 }
 
 // instantiateFactory handles both sync and async factories.
-func (c *Container) instantiateFactory(p *provider.Provider) any {
+func (c *Container) instantiateFactory(p *provider.Provider, _ string) any {
 	if p.FactoryC != nil {
 		ch, err := p.FactoryC()
 		if err != nil {
@@ -162,7 +244,7 @@ func (c *Container) instantiateFactory(p *provider.Provider) any {
 }
 
 // instantiateClass creates struct instances and injects dependencies recursively.
-func (c *Container) instantiateClass(p *provider.Provider, seen map[string]bool) any {
+func (c *Container) instantiateClass(p *provider.Provider, seen map[string]bool, reqID string) any {
 	if seen[p.Name] {
 		panic(fmt.Sprintf("[container] circular dependency detected: %s", p.Name))
 	}
@@ -190,9 +272,10 @@ func (c *Container) instantiateClass(p *provider.Provider, seen map[string]bool)
 			panic(fmt.Sprintf("[container] dependency not found: %s", depName))
 		}
 
-		depInstance := c.instantiate(depProvider, seen)
-		depVal := reflect.ValueOf(depInstance)
+		// 🔴 AQUI é o pulo do gato:
+		depInstance := c.resolveProvider(depProvider, reqID, seen)
 
+		depVal := reflect.ValueOf(depInstance)
 		if depVal.Type().AssignableTo(field.Type) && instanceValue.Field(i).CanSet() {
 			instanceValue.Field(i).Set(depVal)
 		} else {

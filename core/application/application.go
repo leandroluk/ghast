@@ -1,8 +1,14 @@
-// core/application/application.go  (alterar)
 package application
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/signal"
+	"reflect"
+	"sync/atomic"
+	"syscall"
+	"time"
 
 	"github.com/leandroluk/ghast/core/container"
 	"github.com/leandroluk/ghast/core/controller"
@@ -13,8 +19,12 @@ import (
 	"github.com/leandroluk/ghast/core/logger"
 	"github.com/leandroluk/ghast/core/middleware"
 	"github.com/leandroluk/ghast/core/module"
+	"github.com/leandroluk/ghast/core/provider"
 )
 
+var reqSeq uint64
+
+// Application representa o runtime root do Ghast.
 type Application struct {
 	name               string
 	logger             logger.Logger
@@ -25,9 +35,16 @@ type Application struct {
 	globalGuards       []guard.Guard
 	globalFilters      []exception.Filter
 	adapters           []Adapter
-	defaultFilter      exception.Filter
+
+	defaultFilter exception.Filter
 }
 
+// Adapter opcionalmente pode implementar Shutdown(ctx).
+type stoppable interface {
+	Shutdown(ctx context.Context) error
+}
+
+// Builder fornece a API fluente de configuração da app.
 type Builder struct{ app *Application }
 
 func (b *Builder) Name(name string) *Builder {
@@ -82,34 +99,98 @@ func (b *Builder) Mount(adapters ...Adapter) *Builder {
 	return b
 }
 
+// Start registra módulos, monta rotas, inicia adapters e gerencia shutdown.
 func (a *Application) Start(addr string) error {
 	log := a.logger.WithAppTag(a.name)
 	log.Logf("NestFactory", "Starting Ghast application...")
 
+	// registra módulos
 	for _, m := range a.modules {
 		m.Logger = log
 		m.Register(a.container)
 	}
 	log.Logf("NestFactory", "All modules registered (%d)", len(a.modules))
 
+	// mapeia rotas
 	for _, ad := range a.adapters {
 		if err := a.mountAdapter(log, ad); err != nil {
 			return err
 		}
 	}
 
+	// inicia adapters em goroutine
+	errCh := make(chan error, len(a.adapters))
 	for _, ad := range a.adapters {
-		if starter, ok := ad.(interface{ Start(addr string) error }); ok {
-			if err := starter.Start(addr); err != nil {
-				return fmt.Errorf("failed to start adapter: %w", err)
+		go func(ad Adapter) {
+			if starter, ok := ad.(interface{ Start(addr string) error }); ok {
+				errCh <- starter.Start(addr)
+			} else {
+				errCh <- nil
+			}
+		}(ad)
+	}
+
+	log.Logf("NestApplication", "Ghast application successfully started")
+	log.Logf("bootstrap", "🌎 started on %s", addr)
+
+	// espera sinal de SO ou erro de adapter
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	var shutReason string
+	select {
+	case sig := <-sigCh:
+		shutReason = sig.String()
+		log.Logf("NestApplication", "Shutting down (%s)...", shutReason)
+	case err := <-errCh:
+		if err != nil {
+			shutReason = "adapter-error"
+			log.Errorf("NestApplication", "Adapter error: %v", err)
+		} else {
+			shutReason = "adapter-exit"
+			log.Logf("NestApplication", "Adapter exited")
+		}
+	}
+
+	// tenta parar adapters com Shutdown(ctx)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, ad := range a.adapters {
+		if s, ok := ad.(stoppable); ok {
+			_ = s.Shutdown(ctx)
+		}
+	}
+
+	// hooks de shutdown nos providers singleton (sem instanciar novos)
+	for _, m := range a.modules {
+		for _, p := range m.Providers {
+			if p.Scope != provider.Singleton {
+				continue
+			}
+			// pega a instância cacheada (Resolve de singleton retorna a existente)
+			inst := a.container.Resolve(reflect.Zero(p.Type).Interface())
+
+			if appHook, ok := inst.(provider.OnApplicationShutdown); ok {
+				// melhor esforço: passa ctx com timeout
+				func() {
+					defer func() { _ = recover() }()
+					appHook.OnApplicationShutdown(ctx)
+				}()
+			}
+			if destroy, ok := inst.(provider.OnModuleDestroy); ok {
+				func() {
+					defer func() { _ = recover() }()
+					destroy.OnModuleDestroy()
+				}()
 			}
 		}
 	}
-	log.Logf("NestApplication", "Ghast application successfully started")
-	log.Logf("bootstrap", "🌎 started on %s", addr)
+
+	log.Logf("NestApplication", "Shutdown complete (%s)", shutReason)
 	return nil
 }
 
+// mountAdapter aplica o pipeline real e mapeia rotas no adapter.
 func (a *Application) mountAdapter(log logger.Logger, ad Adapter) error {
 	globalGuardNames := mapSlice(a.globalGuards, func(g guard.Guard) string { return naming.TypeNameOf(g) })
 	globalInterNames := mapSlice(a.globalInterceptors, func(i interceptor.Interceptor) string { return naming.TypeNameOf(i) })
@@ -148,11 +229,9 @@ func (a *Application) mountAdapter(log logger.Logger, ad Adapter) error {
 				}
 
 				// === PIPELINE REAL ===
-
-				// 1) Handler base (controller)
 				h := rt.Handler
 
-				// 2) Interceptors (globais + rota)
+				// Interceptors
 				allInterceptors := append([]interceptor.Interceptor{}, a.globalInterceptors...)
 				for _, it := range rt.Interceptors {
 					if v, ok := it.(interceptor.Interceptor); ok {
@@ -161,7 +240,7 @@ func (a *Application) mountAdapter(log logger.Logger, ad Adapter) error {
 				}
 				h = wrapWithInterceptors(h, allInterceptors)
 
-				// 3) Guards (globais + rota)
+				// Guards
 				allGuards := append([]guard.Guard{}, a.globalGuards...)
 				for _, g := range rt.Guards {
 					if v, ok := g.(guard.Guard); ok {
@@ -170,12 +249,12 @@ func (a *Application) mountAdapter(log logger.Logger, ad Adapter) error {
 				}
 				h = wrapWithGuards(h, allGuards)
 
-				// 4) Middlewares (globais + rota)
+				// Middlewares
 				allMws := append([]middleware.Middleware{}, a.globalMiddlewares...)
 				allMws = append(allMws, rt.Middlewares...)
 				h = middleware.Compose(h, allMws...)
 
-				// 5) Exception filters (globais + rota + default)
+				// Exceptions
 				allFilters := append([]exception.Filter{}, a.globalFilters...)
 				for _, f := range rt.Filters {
 					if v, ok := f.(exception.Filter); ok {
@@ -183,11 +262,14 @@ func (a *Application) mountAdapter(log logger.Logger, ad Adapter) error {
 					}
 				}
 				if a.defaultFilter != nil {
-					allFilters = append(allFilters, a.defaultFilter) // no fim da cadeia
+					allFilters = append(allFilters, a.defaultFilter)
 				} else {
-					allFilters = append(allFilters, exception.NewDefault()) // fallback
+					allFilters = append(allFilters, exception.NewDefault())
 				}
 				h = wrapWithExceptions(h, allFilters)
+
+				// Request scope (mais externo)
+				h = a.wrapWithRequestScope(h)
 
 				// Mapear
 				log.Logf("RouterExplorer", "Mapped {%s, %s} route", rt.Path, rt.Method)
@@ -196,4 +278,15 @@ func (a *Application) mountAdapter(log logger.Logger, ad Adapter) error {
 		}
 	}
 	return nil
+}
+
+// wrapWithRequestScope abre um escopo de request no container e limpa no fim.
+func (a *Application) wrapWithRequestScope(final middleware.Handler) middleware.Handler {
+	return func(ctx middleware.Context) error {
+		id := fmt.Sprintf("%d", atomic.AddUint64(&reqSeq, 1))
+		a.container.BeginRequest(id)
+		ctx.Locals().Set("__ghast_reqid", id)
+		defer a.container.EndRequest(id)
+		return final(ctx)
+	}
 }

@@ -2,6 +2,8 @@
 package adapter
 
 import (
+	"context" // <- novo import
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/leandroluk/ghast/core/controller"
 	"github.com/leandroluk/ghast/core/middleware"
@@ -11,16 +13,13 @@ type Adapter struct {
 	app *fiber.App
 }
 
-func New(app *fiber.App) *Adapter {
-	return &Adapter{app: app}
-}
+func New(app *fiber.App) *Adapter { return &Adapter{app: app} }
 
 func (a *Adapter) OnRoute(path string, method controller.Method, handler middleware.Handler) {
 	fiberHandler := func(c *fiber.Ctx) error {
 		ctx := NewContext(c)
 		return handler(ctx)
 	}
-
 	switch method {
 	case controller.GET:
 		a.app.Get(path, fiberHandler)
@@ -42,5 +41,11 @@ func (a *Adapter) OnRoute(path string, method controller.Method, handler middlew
 }
 
 func (a *Adapter) Start(addr string) error {
-	return a.app.Listen(addr)
+	return a.app.Listen(addr) // bloqueia até Shutdown()
+}
+
+// Implementa a interface stoppable do Application.
+func (a *Adapter) Shutdown(ctx context.Context) error {
+	// Fiber não usa ctx aqui; apenas para cumprir a interface.
+	return a.app.Shutdown()
 }

@@ -1,4 +1,4 @@
-// core/internal/naming/naming.go  (novo)
+// core/internal/naming/naming.go
 package naming
 
 import (

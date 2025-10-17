@@ -2,6 +2,7 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 )
@@ -36,13 +37,12 @@ type Provider struct {
 }
 
 // Lifecycle hooks
-type OnInit interface {
-	OnInit()
-}
-
-type AfterInit interface {
-	AfterInit()
-}
+type OnInit interface{ OnInit() }
+type AfterInit interface{ AfterInit() }
+type OnModuleInit interface{ OnModuleInit() }
+type OnModuleDestroy interface{ OnModuleDestroy() }
+type OnApplicationShutdown interface{ OnApplicationShutdown(ctx context.Context) }
+type OnRequestDestroy interface{ OnRequestDestroy() }
 
 // Builder helps construct providers declaratively.
 type Builder struct {

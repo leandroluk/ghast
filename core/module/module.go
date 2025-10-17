@@ -6,7 +6,6 @@ import (
 	"reflect"
 
 	"github.com/leandroluk/ghast/core/container"
-	"github.com/leandroluk/ghast/core/controller"
 	"github.com/leandroluk/ghast/core/logger"
 	"github.com/leandroluk/ghast/core/provider"
 )
@@ -27,33 +26,38 @@ type Module struct {
 func (m *Module) Register(c *container.Container) {
 	m.Container = c
 
+	// 1) registra imports primeiro
 	for _, imported := range m.Imports {
-		// herda logger
 		imported.Logger = m.Logger
 		imported.Register(c)
 	}
 
+	// 2) registra providers
 	for _, p := range m.Providers {
 		c.Register(p)
 	}
 
+	// 3) resolve singletons (instancia) e chama OnModuleInit (se houver)
 	for _, p := range m.Providers {
-		if p.Scope == provider.Singleton {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Printf("[module] failed to resolve provider: %s (%v)\n", p.Name, r)
-				}
-			}()
-			providerType := reflect.Zero(p.Type).Interface()
-			_ = c.Resolve(providerType)
+		if p.Scope != provider.Singleton {
+			continue
+		}
+
+		defer func(name string) {
+			if r := recover(); r != nil {
+				fmt.Printf("[module] failed to resolve provider: %s (%v)\n", name, r)
+			}
+		}(p.Name)
+
+		providerType := reflect.Zero(p.Type).Interface()
+		inst := c.Resolve(providerType) // singleton cacheado
+
+		if hook, ok := inst.(provider.OnModuleInit); ok {
+			hook.OnModuleInit()
 		}
 	}
 
-	for i, ctrl := range m.Controllers {
-		if ctr, ok := ctrl.(*controller.Controller); ok {
-			m.Controllers[i] = ctr.EnsureBuilt(c)
-		}
-	}
+	// (controllers são “built” pelo Module.New/Controller.EnsureBuilt fora daqui)
 
 	if m.Logger != nil {
 		m.Logger.Logf("InstanceLoader", "%s dependencies initialized", m.Name)
