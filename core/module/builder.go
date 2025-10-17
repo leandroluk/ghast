@@ -1,3 +1,4 @@
+// core/module/builder.go
 package module
 
 import "github.com/leandroluk/ghast/core/provider"

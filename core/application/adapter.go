@@ -1,3 +1,4 @@
+// core/application/adapter.go
 package application
 
 import (
@@ -8,5 +9,6 @@ import (
 // Adapter defines a transport integration (HTTP, gRPC, etc.)
 // responsible for binding routes from controllers into its routing system.
 type Adapter interface {
-	OnRoute(base string, path string, method controller.Method, handler middleware.Handler)
+	OnRoute(path string, method controller.Method, handler middleware.Handler)
+	Start(addr string) error
 }

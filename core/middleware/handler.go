@@ -1,3 +1,4 @@
+// core/middleware/handler.go
 package middleware
 
 // Handler defines the middleware function signature.

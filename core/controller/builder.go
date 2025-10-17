@@ -1,9 +1,11 @@
+// core/controller/builder.go
 package controller
 
 import (
 	"fmt"
 	"reflect"
 
+	"github.com/leandroluk/ghast/core/container"
 	"github.com/leandroluk/ghast/core/middleware"
 )
 
@@ -13,6 +15,13 @@ type Builder struct {
 	name   string
 	base   string
 	routes []*Route
+	ctn    *container.Container
+}
+
+// WithContainer associa um container ao builder.
+func (b *Builder) WithContainer(ctn *container.Container) *Builder {
+	b.ctn = ctn
+	return b
 }
 
 // BasePath sets the base path for all routes defined in this controller.
@@ -62,16 +71,6 @@ func (b *Builder) Options(path string, handler middleware.Handler) *Builder {
 // Head registers a HEAD route.
 func (b *Builder) Head(path string, handler middleware.Handler) *Builder {
 	return b.add(HEAD, path, handler)
-}
-
-// Trace registers a TRACE route.
-func (b *Builder) Trace(path string, handler middleware.Handler) *Builder {
-	return b.add(TRACE, path, handler)
-}
-
-// Connect registers a CONNECT route.
-func (b *Builder) Connect(path string, handler middleware.Handler) *Builder {
-	return b.add(CONNECT, path, handler)
 }
 
 // Use attaches middleware(s) to the most recently defined route.

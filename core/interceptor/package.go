@@ -1,3 +1,4 @@
+// core/interceptor/package.go
 package interceptor
 
 import "github.com/leandroluk/ghast/core/middleware"

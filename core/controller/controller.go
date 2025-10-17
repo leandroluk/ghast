@@ -1,3 +1,4 @@
+// core/controller/controller.go
 package controller
 
 // Controller represents a fully built controller with its routes.

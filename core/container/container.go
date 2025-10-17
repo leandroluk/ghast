@@ -1,3 +1,4 @@
+// core/container/container.go
 package container
 
 import (
@@ -30,6 +31,8 @@ func (c *Container) Register(p *provider.Provider) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	fmt.Println("[container] registering:", p.Name)
+
 	if _, exists := c.providers[p.Name]; exists {
 		panic(fmt.Sprintf("[container] provider '%s' already registered", p.Name))
 	}
@@ -45,7 +48,7 @@ func (c *Container) Resolve(target any) any {
 		targetType = targetType.Elem()
 	}
 
-	name := targetType.String()
+	name := provider.TypeName(targetType)
 
 	c.mu.RLock()
 	p, ok := c.providers[name]

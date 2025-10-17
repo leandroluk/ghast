@@ -1,3 +1,4 @@
+// core/application/package.go
 package application
 
 import (
@@ -15,12 +16,19 @@ import (
 //	    b.Register(SystemModule)
 //	})
 func New(fn func(b *Builder)) *Application {
+	// cria o container global
+	ctn := container.NewContainer()
+
+	// cria o builder da aplicação com o container injetado
 	b := &Builder{
 		app: &Application{
-			container: container.NewContainer(),
+			container: ctn,
 			modules:   []*module.Module{},
 		},
 	}
+
+	// executa o builder do usuário
 	fn(b)
+
 	return b.app
 }

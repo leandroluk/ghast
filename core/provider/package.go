@@ -1,21 +1,32 @@
+// core/provider/package.go
 package provider
 
 import "reflect"
 
-// New executes the builder function immediately and returns the final provider.
-//
-// Example:
-//
-//	var LoggerProvider = provider.New(func(b *provider.Builder) {
-//		b.Factory("Logger", func() (any, error) { return log.Default(), nil })
-//	})
+// New executa o builder e retorna o provider final.
 func New(fn func(b *Builder)) *Provider {
 	b := &Builder{}
 	fn(b)
 	return b.Build()
 }
 
-// NameFromType generates a readable provider name from a reflect.Type.
+// NameFromType gera o nome público do provider com suporte a genéricos.
 func NameFromType(t reflect.Type) string {
-	return t.PkgPath() + "." + t.Name()
+	return TypeName(t)
+}
+
+// TypeName retorna o nome totalmente qualificado de um tipo (compatível com genéricos).
+func TypeName(t reflect.Type) string {
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+
+	// Go "normal": tem PkgPath + Name
+	if t.Name() != "" && t.PkgPath() != "" {
+		return t.PkgPath() + "." + t.Name()
+	}
+
+	// Go genérico: Name() vazio, String() retorna o formato correto
+	// exemplo: "github.com/leandroluk/ghast/example.Repo[int]"
+	return t.String()
 }

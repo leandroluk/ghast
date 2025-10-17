@@ -1,3 +1,4 @@
+// core/controller/router.go
 package controller
 
 import "github.com/leandroluk/ghast/core/middleware"
@@ -13,8 +14,6 @@ const (
 	DELETE  Method = "DELETE"
 	OPTIONS Method = "OPTIONS"
 	HEAD    Method = "HEAD"
-	TRACE   Method = "TRACE"
-	CONNECT Method = "CONNECT"
 )
 
 // Route represents a single controller route definition,

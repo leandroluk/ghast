@@ -1,16 +1,43 @@
+// core/controller/package.go
 package controller
 
-// New executes the builder function immediately
-// and returns the finalized Controller instance.
+import (
+	"fmt"
+	"reflect"
+
+	"github.com/leandroluk/ghast/core/container"
+)
+
+// New executa o builder function e garante que o controller tenha receivers corretos.
+// Exemplo:
 //
-// Example:
-//
-//	var SystemController = controller.New(func(b *controller.Builder) {
+//	var SystemController = controller.New(func(b *controller.Builder, c *MyController) {
 //		b.BasePath("/system")
-//		b.Get("health", func(ctx middleware.Context) { ... })
+//		b.Get("health", c.HealthCheck)
 //	})
-func New(fn func(b *Builder)) *Controller {
+func New[T any](fn func(b *Builder, c *T), ctn *container.Container) *Controller {
+	t := reflect.TypeOf((*T)(nil)).Elem()
+	validateControllerType(t)
+
 	b := &Builder{}
-	fn(b)
+	// ✅ resolve o controller via container
+	instance := ctn.Resolve(new(T)).(*T)
+
+	fn(b, instance)
 	return b.Build()
+}
+
+// validateControllerType garante que todos os métodos do controller
+// tenham receiver por ponteiro (*Controller), não por valor.
+func validateControllerType(t reflect.Type) {
+	ptrType := reflect.PointerTo(t)
+	for i := 0; i < t.NumMethod(); i++ {
+		m := t.Method(i)
+		if _, ok := ptrType.MethodByName(m.Name); !ok {
+			panic(fmt.Sprintf(
+				"[controller] method %s must have a pointer receiver (*%s)",
+				m.Name, t.Name(),
+			))
+		}
+	}
 }

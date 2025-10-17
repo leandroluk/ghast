@@ -1,3 +1,4 @@
+// core/application/meta.go
 package application
 
 import (

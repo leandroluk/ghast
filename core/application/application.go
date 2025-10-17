@@ -1,3 +1,4 @@
+// core/application/application.go
 package application
 
 import (
@@ -58,8 +59,9 @@ func (b *Builder) Mount(adapters ...Adapter) *Builder {
 }
 
 // Start bootstraps the application and runs all attached adapters.
-func (a *Application) Start() error {
+func (a *Application) Start(addr string) error {
 	for _, m := range a.modules {
+		// 🔗 vincula o módulo com a aplicação
 		m.Register(a.container)
 	}
 	fmt.Printf("[app] registered %d modules\n", len(a.modules))
@@ -69,6 +71,15 @@ func (a *Application) Start() error {
 			return err
 		}
 	}
+
+	for _, adapter := range a.adapters {
+		if starter, ok := adapter.(interface{ Start(addr string) error }); ok {
+			if err := starter.Start(addr); err != nil {
+				return fmt.Errorf("failed to start adapter: %w", err)
+			}
+		}
+	}
+
 	fmt.Println("[app] started successfully")
 	return nil
 }
@@ -82,7 +93,7 @@ func (a *Application) mountAdapter(adapter Adapter) error {
 				continue
 			}
 			for _, route := range c.Routes {
-				adapter.OnRoute(c.Base, route.Path, route.Method, route.Handler)
+				adapter.OnRoute(route.Path, route.Method, route.Handler)
 			}
 		}
 	}

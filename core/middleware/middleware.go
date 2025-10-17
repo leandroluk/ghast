@@ -1,3 +1,4 @@
+// core/middleware/middleware.go
 package middleware
 
 // Package middleware defines the minimal middleware interface

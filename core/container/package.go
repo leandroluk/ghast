@@ -1,3 +1,4 @@
+// core/container/package.go
 package container
 
 import (

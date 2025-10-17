@@ -1,3 +1,4 @@
+// core/guard/package.go
 package guard
 
 import "github.com/leandroluk/ghast/core/middleware"

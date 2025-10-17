@@ -1,0 +1,52 @@
+estou criando um framework NestJS Like chamado "github.com/leandroluk/ghast" em golang. a estrutura de arquivos até o momento está assim:
+
+```
+adapter/
+  fiber/
+    adapter.go
+    context.go
+  gin/
+    adapter.go
+    context.go
+core/
+  application/
+    adapter.go
+    application.go
+    meta.go
+    package.go
+  container/
+    container.go
+    package.go
+  controller/
+    builder.go
+    controller.go
+    package.go
+    router.go
+  guard/
+    guard.go
+    package.go
+  interceptor/
+    interceptor.go
+    package.go
+  middleware/
+    context.go
+    handler.go
+    middleware.go
+    package.go
+  module/
+    builder.go
+    module.go
+    package.go
+  provider/
+    package.go
+    provider.go
+  example/
+    fiber/main.go
+    gin/main.go
+    controller.go
+    model.go
+    module.go
+    service.go
+```
+
+como sei que há um limite de arquivos para análise vou lhe enviar cada submódulo para que alimente o contexto do prompt. até o fim do envio, apenas faça suas análises internas para conhecer o projeto para que possamos seguir depois trabalhando
