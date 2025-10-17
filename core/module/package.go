@@ -12,9 +12,10 @@ import "github.com/leandroluk/ghast/core/provider"
 //	    b.AddControllers(SystemController)
 //	    b.AddProviders(DbProvider)
 //	})
-func New(fn func(b *Builder)) *Module {
+func New(name string, fn func(b *Builder)) *Module {
 	b := &Builder{
 		module: &Module{
+			Name:        name,
 			Providers:   []*provider.Provider{},
 			Controllers: []any{},
 			Imports:     []*Module{},

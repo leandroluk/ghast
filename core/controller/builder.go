@@ -4,6 +4,7 @@ package controller
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/leandroluk/ghast/core/container"
 	"github.com/leandroluk/ghast/core/middleware"
@@ -33,6 +34,9 @@ func (b *Builder) BasePath(path string) *Builder {
 	}
 	if path[0] != '/' {
 		path = "/" + path
+	}
+	if len(path) > 1 {
+		path = strings.TrimRight(path, "/")
 	}
 	b.base = path
 	return b
@@ -119,18 +123,17 @@ func (b *Builder) Build() *Controller {
 
 // add registers a new route under the given method and path.
 func (b *Builder) add(method Method, path string, handler middleware.Handler) *Builder {
-	if path == "" {
-		path = "/"
+	path = strings.TrimSpace(path)
+	var full string
+	if path == "" || path == "/" {
+		full = b.base
+	} else {
+		if path[0] != '/' {
+			path = "/" + path
+		}
+		full = b.base + path
 	}
-	if path[0] != '/' {
-		path = "/" + path
-	}
-	full := b.base + path
-	b.routes = append(b.routes, &Route{
-		Method:  method,
-		Path:    full,
-		Handler: handler,
-	})
+	b.routes = append(b.routes, &Route{Method: method, Path: full, Handler: handler})
 	return b
 }
 

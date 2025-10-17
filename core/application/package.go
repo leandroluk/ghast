@@ -3,6 +3,7 @@ package application
 
 import (
 	"github.com/leandroluk/ghast/core/container"
+	"github.com/leandroluk/ghast/core/logger"
 	"github.com/leandroluk/ghast/core/module"
 )
 
@@ -16,19 +17,15 @@ import (
 //	    b.Register(SystemModule)
 //	})
 func New(fn func(b *Builder)) *Application {
-	// cria o container global
 	ctn := container.NewContainer()
-
-	// cria o builder da aplicação com o container injetado
 	b := &Builder{
 		app: &Application{
+			name:      "ghast",
+			logger:    logger.NewConsole(), // default
 			container: ctn,
 			modules:   []*module.Module{},
 		},
 	}
-
-	// executa o builder do usuário
 	fn(b)
-
 	return b.app
 }

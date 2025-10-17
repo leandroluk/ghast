@@ -15,16 +15,21 @@ import (
 //		b.BasePath("/system")
 //		b.Get("health", c.HealthCheck)
 //	})
-func New[T any](fn func(b *Builder, c *T), ctn *container.Container) *Controller {
+func New[T any](fn func(b *Builder, c *T)) *Controller {
 	t := reflect.TypeOf((*T)(nil)).Elem()
 	validateControllerType(t)
 
-	b := &Builder{}
-	// ✅ resolve o controller via container
-	instance := ctn.Resolve(new(T)).(*T)
-
-	fn(b, instance)
-	return b.Build()
+	// devolve um Controller "vazio" com closure de build
+	return &Controller{
+		lazy: func(ctn *container.Container) *Controller {
+			b := &Builder{}
+			b.name = t.Name()
+			instance := new(T)
+			ctn.Inject(instance)
+			fn(b, instance)
+			return b.Build()
+		},
+	}
 }
 
 // validateControllerType garante que todos os métodos do controller

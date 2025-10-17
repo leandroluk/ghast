@@ -6,6 +6,8 @@ import (
 	"reflect"
 
 	"github.com/leandroluk/ghast/core/container"
+	"github.com/leandroluk/ghast/core/controller"
+	"github.com/leandroluk/ghast/core/logger"
 	"github.com/leandroluk/ghast/core/provider"
 )
 
@@ -17,6 +19,7 @@ type Module struct {
 	Controllers []any
 	Imports     []*Module
 	Container   *container.Container
+	Logger      logger.Logger
 }
 
 // Register registra recursivamente todos os providers do módulo
@@ -24,52 +27,35 @@ type Module struct {
 func (m *Module) Register(c *container.Container) {
 	m.Container = c
 
-	// Registra módulos importados primeiro
 	for _, imported := range m.Imports {
+		// herda logger
+		imported.Logger = m.Logger
 		imported.Register(c)
 	}
 
-	// Registra os providers deste módulo
 	for _, p := range m.Providers {
 		c.Register(p)
 	}
 
-	// Resolve e inicializa imediatamente os providers Singleton
 	for _, p := range m.Providers {
 		if p.Scope == provider.Singleton {
-			var instance any
-
 			defer func() {
 				if r := recover(); r != nil {
 					fmt.Printf("[module] failed to resolve provider: %s (%v)\n", p.Name, r)
 				}
 			}()
-
-			// Usa o tipo direto (sem ponteiro extra) — compatível com o registro
 			providerType := reflect.Zero(p.Type).Interface()
-			instance = c.Resolve(providerType)
-
-			if instance == nil {
-				fmt.Printf("[module] provider %s returned nil\n", p.Name)
-				continue
-			}
-
-			// Executa hooks de ciclo de vida (redundância segura)
-			if initable, ok := instance.(provider.OnInit); ok {
-				initable.OnInit()
-			}
-			if afterInit, ok := instance.(provider.AfterInit); ok {
-				afterInit.AfterInit()
-			}
-
-			fmt.Printf("[module] initialized provider: %s (%s)\n", p.Name, p.Scope)
+			_ = c.Resolve(providerType)
 		}
 	}
 
-	fmt.Printf(
-		"[module] %s registered (%d providers, %d controllers)\n",
-		m.Name,
-		len(m.Providers),
-		len(m.Controllers),
-	)
+	for i, ctrl := range m.Controllers {
+		if ctr, ok := ctrl.(*controller.Controller); ok {
+			m.Controllers[i] = ctr.EnsureBuilt(c)
+		}
+	}
+
+	if m.Logger != nil {
+		m.Logger.Logf("InstanceLoader", "%s dependencies initialized", m.Name)
+	}
 }

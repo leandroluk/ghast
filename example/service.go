@@ -1,8 +1,6 @@
 // example/service.go
 package example
 
-import "fmt"
-
 // UserService handles in-memory user storage.
 type UserService struct {
 	store map[int]*User
@@ -12,7 +10,6 @@ type UserService struct {
 func (s *UserService) OnInit() {
 	s.store = make(map[int]*User)
 	s.next = 1
-	fmt.Println("[user.service] initialized")
 }
 
 func (s *UserService) Create(name, email string) *User {

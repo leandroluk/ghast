@@ -1,0 +1,34 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "kill-port-3000",
+      "type": "shell",
+      "problemMatcher": [],
+      "windows": {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "$conns = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue; if ($conns) { $pids = $conns | Select-Object -Expand OwningProcess | Get-Unique; foreach ($pid in $pids) { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue } }"
+        ]
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "fuser -k 3000/tcp 2>/dev/null || { pids=$(lsof -ti :3000 2>/dev/null); [ -n \"$pids\" ] && kill -9 $pids; } || true"
+        ]
+      },
+      "osx": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "pids=$(lsof -ti :3000 2>/dev/null); [ -n \"$pids\" ] && kill -9 $pids || true"
+        ]
+      }
+    }
+  ]
+}

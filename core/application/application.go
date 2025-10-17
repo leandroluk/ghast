@@ -1,20 +1,23 @@
-// core/application/application.go
+// core/application/application.go  (alterar)
 package application
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/leandroluk/ghast/core/container"
 	"github.com/leandroluk/ghast/core/controller"
 	"github.com/leandroluk/ghast/core/guard"
 	"github.com/leandroluk/ghast/core/interceptor"
+	"github.com/leandroluk/ghast/core/internal/naming"
+	"github.com/leandroluk/ghast/core/logger"
 	"github.com/leandroluk/ghast/core/middleware"
 	"github.com/leandroluk/ghast/core/module"
 )
 
-// Application represents the Ghast root runtime container.
-// It coordinates modules, providers, controllers and global middlewares.
 type Application struct {
+	name               string
+	logger             logger.Logger
 	container          *container.Container
 	modules            []*module.Module
 	globalMiddlewares  []middleware.Middleware
@@ -23,89 +26,151 @@ type Application struct {
 	adapters           []Adapter
 }
 
-// Builder provides a fluent interface for building an Application declaratively.
-type Builder struct {
-	app *Application
+type Builder struct{ app *Application }
+
+func (b *Builder) Name(name string) *Builder {
+	b.app.name = name
+	return b
 }
 
-// Use registers global middlewares to be executed for every request.
+func (b *Builder) Logger(l logger.Logger) *Builder {
+	if l != nil {
+		b.app.logger = l
+	}
+	return b
+}
+
+// já existentes...
 func (b *Builder) Use(mw ...middleware.Middleware) *Builder {
 	b.app.globalMiddlewares = append(b.app.globalMiddlewares, mw...)
 	return b
 }
-
-// Intercept registers global interceptors applied to all controllers.
 func (b *Builder) Intercept(ic ...interceptor.Interceptor) *Builder {
 	b.app.globalInterceptors = append(b.app.globalInterceptors, ic...)
 	return b
 }
-
-// Guard registers global guards applied before any controller handler.
 func (b *Builder) Guard(g ...guard.Guard) *Builder {
 	b.app.globalGuards = append(b.app.globalGuards, g...)
 	return b
 }
-
-// Register adds one or more modules to the Application.
 func (b *Builder) Register(mods ...*module.Module) *Builder {
 	b.app.modules = append(b.app.modules, mods...)
 	return b
 }
-
-// Mount attaches an adapter (HTTP, gRPC, etc.) to the Application.
 func (b *Builder) Mount(adapters ...Adapter) *Builder {
 	b.app.adapters = append(b.app.adapters, adapters...)
 	return b
 }
 
-// Start bootstraps the application and runs all attached adapters.
 func (a *Application) Start(addr string) error {
+	log := a.logger.WithAppTag(a.name)
+
+	log.Logf("NestFactory", "Starting Ghast application...")
+
 	for _, m := range a.modules {
-		// 🔗 vincula o módulo com a aplicação
+		m.Logger = log
 		m.Register(a.container)
 	}
-	fmt.Printf("[app] registered %d modules\n", len(a.modules))
+	log.Logf("NestFactory", "All modules registered (%d)", len(a.modules))
 
-	for _, adapter := range a.adapters {
-		if err := a.mountAdapter(adapter); err != nil {
+	for _, ad := range a.adapters {
+		if err := a.mountAdapter(log, ad); err != nil {
 			return err
 		}
 	}
 
-	for _, adapter := range a.adapters {
-		if starter, ok := adapter.(interface{ Start(addr string) error }); ok {
+	for _, ad := range a.adapters {
+		if starter, ok := ad.(interface{ Start(addr string) error }); ok {
 			if err := starter.Start(addr); err != nil {
 				return fmt.Errorf("failed to start adapter: %w", err)
 			}
 		}
 	}
 
-	fmt.Println("[app] started successfully")
+	log.Logf("NestApplication", "Ghast application successfully started")
+	log.Logf("bootstrap", "🌎 started on %s", addr)
 	return nil
 }
 
-// mountAdapter binds all controllers from modules into the given adapter.
-func (a *Application) mountAdapter(adapter Adapter) error {
+func (a *Application) mountAdapter(log logger.Logger, ad Adapter) error {
+	// nomes dos globais (pra log bonito)
+	globalGuardNames := mapSlice(a.globalGuards, func(g guard.Guard) string { return naming.TypeNameOf(g) })
+	globalInterNames := mapSlice(a.globalInterceptors, func(i interceptor.Interceptor) string { return naming.TypeNameOf(i) })
+	globalMwNames := mapSlice(a.globalMiddlewares, func(m middleware.Middleware) string { return safeMwName(m) })
+
 	for _, m := range a.modules {
 		for _, ctrl := range m.Controllers {
 			c, ok := ctrl.(*controller.Controller)
 			if !ok {
 				continue
 			}
+			log.Logf("RoutesResolver", "%s {%s}:", c.Name, c.Base)
+
 			for _, route := range c.Routes {
-				adapter.OnRoute(route.Path, route.Method, route.Handler)
+				// nomes específicos da rota
+				routeGuardNames := mapAny(route.Guards, naming.TypeNameOf)
+				routeInterNames := mapAny(route.Interceptors, naming.TypeNameOf)
+				routeMwNames := make([]string, 0, len(route.Middlewares))
+				for _, mw := range route.Middlewares {
+					routeMwNames = append(routeMwNames, safeMwName(mw))
+				}
+
+				// print estilo Nest (extra)
+				if len(globalGuardNames) > 0 || len(routeGuardNames) > 0 {
+					log.Logf("RouterExplorer", "[Guards] %s",
+						joinTwo(globalGuardNames, routeGuardNames))
+				}
+				if len(globalInterNames) > 0 || len(routeInterNames) > 0 {
+					log.Logf("RouterExplorer", "[Interceptors] %s",
+						joinTwo(globalInterNames, routeInterNames))
+				}
+				if len(globalMwNames) > 0 || len(routeMwNames) > 0 {
+					log.Logf("RouterExplorer", "[Middlewares] %s",
+						joinTwo(globalMwNames, routeMwNames))
+				}
+
+				log.Logf("RouterExplorer", "Mapped {%s, %s} route", route.Path, route.Method)
+				ad.OnRoute(route.Path, route.Method, route.Handler)
 			}
 		}
 	}
+
 	return nil
 }
 
-// Container exposes the underlying DI container.
-func (a *Application) Container() *container.Container {
-	return a.container
+func mapSlice[T any, R any](in []T, f func(T) R) []R {
+	out := make([]R, 0, len(in))
+	for _, v := range in {
+		out = append(out, f(v))
+	}
+	return out
 }
 
-// Snapshot returns a reflective view of the Application composition.
-func (a *Application) Snapshot() *Snapshot {
-	return snapshotOf(a)
+func mapAny(in []any, f func(any) string) []string {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		out = append(out, f(v))
+	}
+	return out
+}
+
+func joinTwo(a, b []string) string {
+	parts := []string{}
+	if len(a) > 0 {
+		parts = append(parts, "global: "+strings.Join(a, ", "))
+	}
+	if len(b) > 0 {
+		parts = append(parts, "route: "+strings.Join(b, ", "))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " | ")
+}
+
+func safeMwName(m middleware.Middleware) string {
+	if m.Name != "" {
+		return m.Name
+	}
+	return "<anonymous>"
 }

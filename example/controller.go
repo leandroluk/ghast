@@ -11,7 +11,7 @@ import (
 
 // UserController lida com todas as rotas relacionadas a usuários.
 type UserController struct {
-	Service *UserService `inject:"github.com/leandroluk/ghast/example/example.UserService"`
+	Service *UserService `inject:"github.com/leandroluk/ghast/example.UserService"`
 }
 
 // ListUser GET /users
